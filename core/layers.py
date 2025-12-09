@@ -77,94 +77,96 @@ class SpatioTemporalEmbedding(nn.Module):
     # ==========================================
     # 积木 2: 分层线性交互块 (HLIBlock)
     # ==========================================
-    class HLIBlock(nn.Module):
-        """
-        对应论文 4.3 节: Hierarchical Linear Interaction (HLI)
-        包含: Inter-Patch (宏观/店长会) + Intra-Patch (微观/店内会)
-        """
 
-        def __init__(self, hidden_dim, num_patches, patch_size, rank=32):
-            super().__init__()
 
-            # ------------------------------------------------
-            # 1. Inter-Patch Interaction (宏观: 处理 P 维度)
-            # ------------------------------------------------
-            self.inter_norm = nn.LayerNorm(hidden_dim)
-            # 层归一化：把这排数据重新调整一下，让它们的平均值接近 0，方差接近 1。
+class HLIBlock(nn.Module):
+    """
+    对应论文 4.3 节: Hierarchical Linear Interaction (HLI)
+    包含: Inter-Patch (宏观/店长会) + Intra-Patch (微观/店内会)
+    """
 
-            self.inter_mlp = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, hidden_dim)
-            )
-            # 顺序容器：打包这三个操作，有数据来了就按顺序执行这三个操作
+    def __init__(self, hidden_dim, num_patches, patch_size, rank=32):
+        super().__init__()
 
-            # 低秩投影: P -> rank -> P (对应 Eq. 11)
-            self.low_rank_1 = nn.Linear(num_patches, rank)
-            self.low_rank_2 = nn.Linear(rank, num_patches)
+        # ------------------------------------------------
+        # 1. Inter-Patch Interaction (宏观: 处理 P 维度)
+        # ------------------------------------------------
+        self.inter_norm = nn.LayerNorm(hidden_dim)
+        # 层归一化：把这排数据重新调整一下，让它们的平均值接近 0，方差接近 1。
 
-            # FFN
-            self.inter_ffn = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim * 4),
-                nn.GELU(),
-                nn.Linear(hidden_dim * 4, hidden_dim)
-            )
-            # 这里是先放大再缩小
+        self.inter_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        # 顺序容器：打包这三个操作，有数据来了就按顺序执行这三个操作
 
-            # ------------------------------------------------
-            # 2. Intra-Patch Interaction (微观: 处理 C 维度)
-            # ------------------------------------------------
-            self.intra_norm = nn.LayerNorm(hidden_dim)
-            self.intra_mlp = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, hidden_dim)
-            )
+        # 低秩投影: P -> rank -> P (对应 Eq. 11)
+        self.low_rank_1 = nn.Linear(num_patches, rank)
+        self.low_rank_2 = nn.Linear(rank, num_patches)
 
-            # 补丁内全连接: C -> C (对应 Eq. 13)
-            self.intra_mixer = nn.Linear(patch_size, patch_size)
+        # FFN
+        self.inter_ffn = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 4),
+            nn.GELU(),
+            nn.Linear(hidden_dim * 4, hidden_dim)
+        )
+        # 这里是先放大再缩小
 
-            # FFN
-            self.intra_ffn = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim * 4),
-                nn.GELU(),
-                nn.Linear(hidden_dim * 4, hidden_dim)
-            )
+        # ------------------------------------------------
+        # 2. Intra-Patch Interaction (微观: 处理 C 维度)
+        # ------------------------------------------------
+        self.intra_norm = nn.LayerNorm(hidden_dim)
+        self.intra_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
 
-        def forward(self, x):
-            # 输入 x 形状: (Batch, Time, P, C, Hidden)
+        # 补丁内全连接: C -> C (对应 Eq. 13)
+        self.intra_mixer = nn.Linear(patch_size, patch_size)
 
-            # ===========================
-            # Part 1: Inter-Patch (P)
-            # ===========================
-            residual = x
-            h = self.inter_norm(x)
-            h = self.inter_mlp(h)
+        # FFN
+        self.intra_ffn = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 4),
+            nn.GELU(),
+            nn.Linear(hidden_dim * 4, hidden_dim)
+        )
 
-            # 【关键】把 P (dim=2) 换到最后，因为 Linear 只处理最后一维
-            # (B, T, P, C, H) -> (B, T, C, H, P)
-            h = h.permute(0, 1, 3, 4, 2)
-            h = self.low_rank_1(h)  # P -> rank
-            h = self.low_rank_2(h)  # rank -> P
-            # 换回来 -> (B, T, P, C, H)
-            h = h.permute(0, 1, 4, 2, 3)
+    def forward(self, x):
+        # 输入 x 形状: (Batch, Time, P, C, Hidden)
 
-            x = residual + self.inter_ffn(h)  # 残差连接
+        # ===========================
+        # Part 1: Inter-Patch (P)
+        # ===========================
+        residual = x
+        h = self.inter_norm(x)
+        h = self.inter_mlp(h)
 
-            # ===========================
-            # Part 2: Intra-Patch (C)
-            # ===========================
-            residual = x
-            h = self.intra_norm(x)
-            h = self.intra_mlp(h)
+        # 【关键】把 P (dim=2) 换到最后，因为 Linear 只处理最后一维
+        # (B, T, P, C, H) -> (B, T, C, H, P)
+        h = h.permute(0, 1, 3, 4, 2)
+        h = self.low_rank_1(h)  # P -> rank
+        h = self.low_rank_2(h)  # rank -> P
+        # 换回来 -> (B, T, P, C, H)
+        h = h.permute(0, 1, 4, 2, 3)
 
-            # 【关键】把 C (dim=3) 换到最后
-            # (B, T, P, C, H) -> (B, T, P, H, C)
-            h = h.permute(0, 1, 2, 4, 3)
-            h = self.intra_mixer(h)  # C -> C
-            # 换回来 -> (B, T, P, C, H)
-            h = h.permute(0, 1, 2, 4, 3)
+        x = residual + self.inter_ffn(h)  # 残差连接
 
-            x = residual + self.intra_ffn(h)  # 残差连接
+        # ===========================
+        # Part 2: Intra-Patch (C)
+        # ===========================
+        residual = x
+        h = self.intra_norm(x)
+        h = self.intra_mlp(h)
 
-            return x
+        # 【关键】把 C (dim=3) 换到最后
+        # (B, T, P, C, H) -> (B, T, P, H, C)
+        h = h.permute(0, 1, 2, 4, 3)
+        h = self.intra_mixer(h)  # C -> C
+        # 换回来 -> (B, T, P, C, H)
+        h = h.permute(0, 1, 2, 4, 3)
+
+        x = residual + self.intra_ffn(h)  # 残差连接
+
+        return x
