@@ -21,7 +21,7 @@ def separate_partitions(nodes, capacity):
     nodes.sort(key=lambda node: getattr(node, split_axis))
 
     # Step 2: Identify splitting position
-    split_pos = capacity * math.ceil(len(nodes) / capacity) // 2
+    split_pos = int(capacity * math.ceil(len(nodes) / capacity) // 2)
 
     # Step 3: Partition and recurse
     nodes1 = nodes[:split_pos]
