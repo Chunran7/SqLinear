@@ -9,7 +9,7 @@ def get_args():
     parser.add_argument('--dataset_root', type=str, default='./data', help='数据集根目录')
     parser.add_argument('--dataset_type', type=str, default='sd', help='数据集类型')
     parser.add_argument('--year_folder', type=str, default='2019', help='年份文件夹')
-    parser.add_argument('--meta_file', type=str, default='sd/sd_meta.csv', help='元数据文件名')
+    parser.add_argument('--meta_file', type=str, default='sd_meta.csv', help='元数据文件名')
 
     # --- 数据处理参数 (LargeST Benchmark Setting) ---
     parser.add_argument('--input_len', type=int, default=12, help='历史时间步长度')
