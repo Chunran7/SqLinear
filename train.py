@@ -1,0 +1,181 @@
+import os
+import time
+import torch
+import torch.optim as optim
+import numpy as np
+from config import get_args
+from utils.data_loader import get_dataloader
+from utils.metrics import masked_mae, masked_rmse, masked_mape
+from model.sqlinear import SqLinear
+
+
+def main():
+    # 1. 加载配置
+    args = get_args()
+    device = torch.device(args.device)
+
+    # 创建保存目录
+    save_dir = os.path.join('./checkpoints', args.dataset_type)
+    os.makedirs(save_dir, exist_ok=True)
+
+    print(f"--- Running Training strictly following SqLinear Paper ---")
+    print(f"Device: {device}")
+    print(f"Patch Capacity: {args.patch_capacity}")
+
+    # 2. 加载数据 (自动处理 Partition 和 Scaling)
+    train_loader, val_loader, test_loader, partition_idx, scaler_info = get_dataloader(args)
+
+    # 将 scaler 的均值和方差转为 Tensor，用于反归一化
+    # 形状通常是 (1, 1, 1, 1) 或者 (1, 1, N, 1)，取决于你的标准化方式
+    mean = torch.FloatTensor(scaler_info['mean']).to(device)
+    std = torch.FloatTensor(scaler_info['std']).to(device)
+
+    # 3. 初始化模型
+    # 必须将 partition_idx 转为 LongTensor 并移至 GPU
+    partition_idx_tensor = torch.LongTensor(partition_idx).to(device)
+
+    model = SqLinear(
+        num_nodes=args.num_nodes,
+        input_dim=args.input_dim,
+        hidden_dim=args.hidden_dim,
+        partition_idx=partition_idx_tensor,  # <--- 核心：空间划分索引
+        patch_capacity=args.patch_capacity,
+        num_layers=args.num_layers,
+        input_len=args.input_len,
+        pred_len=args.pred_len
+    ).to(device)
+
+    # 4. 优化器配置 (参考论文常见设置)
+    # 通常使用 Adam，学习率 1e-3，权重衰减 1e-4
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
+
+    # 学习率调度器 (MultiStepLR 是时序预测标准配置)
+    # 在 20, 40, 70 epoch 衰减学习率，或者根据你的收敛情况调整
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 40, 70], gamma=0.1)
+
+    # 5. 训练主循环
+    best_val_mae = float('inf')
+    patience_count = 0
+    max_patience = 15  # Early Stopping 耐心值
+
+    print(f"Start Training: {args.epochs} epochs")
+
+    for epoch in range(args.epochs):
+        start_time = time.time()
+
+        # Params for logging
+        train_loss_list = []
+
+        # --- Training Step ---
+        model.train()
+        for x, y in train_loader:
+            x = x.to(device)  # (B, T_in, N, D) - Scaled
+            y = y.to(device)  # (B, T_out, N, D) - Scaled
+
+            optimizer.zero_grad()
+
+            # Forward
+            preds = model(x)  # (B, T_out, N, D)
+
+            # 论文复现细节：
+            # 大多数代码库(如GraphWaveNet)使用"标准化后的 Masked MAE"作为反向传播的 Loss
+            # 因为这能保证梯度稳定。
+            loss = masked_mae(preds, y, null_val=0.0)
+
+            loss.backward()
+
+            # 梯度裁剪 (Gradient Clipping) - 防止梯度爆炸
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+
+            optimizer.step()
+            train_loss_list.append(loss.item())
+
+        # 更新学习率
+        scheduler.step()
+
+        # --- Validation Step (Strictly on Unscaled Data) ---
+        # 验证集必须反归一化后计算，才是真实的物理误差
+        model.eval()
+        val_mae_list = []
+        val_rmse_list = []
+
+        with torch.no_grad():
+            for x, y in val_loader:
+                x = x.to(device)
+                y = y.to(device)
+
+                preds = model(x)
+
+                # 反归一化 (Inverse Transform)
+                # real_value = scaled_value * std + mean
+                preds_real = preds * std + mean
+                y_real = y * std + mean
+
+                # 计算真实误差
+                v_mae = masked_mae(preds_real, y_real, null_val=0.0)
+                v_rmse = masked_rmse(preds_real, y_real, null_val=0.0)
+
+                val_mae_list.append(v_mae.item())
+                val_rmse_list.append(v_rmse.item())
+
+        train_loss = np.mean(train_loss_list)
+        val_mae = np.mean(val_mae_list)
+        val_rmse = np.mean(val_rmse_list)
+
+        end_time = time.time()
+
+        print(f"Epoch {epoch + 1:03d} | Time: {end_time - start_time:.2f}s | "
+              f"Train Loss: {train_loss:.4f} | "
+              f"Val MAE: {val_mae:.4f} | Val RMSE: {val_rmse:.4f}")
+
+        # --- Early Stopping ---
+        # 基于验证集 MAE (真实流量误差) 来决定模型好坏
+        if val_mae < best_val_mae:
+            best_val_mae = val_mae
+            patience_count = 0
+            best_model_path = os.path.join(save_dir, 'best_model.pth')
+            torch.save(model.state_dict(), best_model_path)
+            print(f"  >>> Best MAE updated. Model saved.")
+        else:
+            patience_count += 1
+            if patience_count >= max_patience:
+                print(f"  >>> Early stopping triggered at epoch {epoch + 1}")
+                break
+
+    # --- Final Test Step ---
+    print("\n--- Starting Final Testing ---")
+    # 加载最优模型
+    model.load_state_dict(torch.load(os.path.join(save_dir, 'best_model.pth')))
+    model.eval()
+
+    test_mae = []
+    test_rmse = []
+    test_mape = []
+
+    with torch.no_grad():
+        for x, y in test_loader:
+            x = x.to(device)
+            y = y.to(device)
+
+            preds = model(x)
+
+            # 反归一化
+            preds_real = preds * std + mean
+            y_real = y * std + mean
+
+            t_mae = masked_mae(preds_real, y_real, null_val=0.0)
+            t_rmse = masked_rmse(preds_real, y_real, null_val=0.0)
+            t_mape = masked_mape(preds_real, y_real, null_val=0.0)
+
+            test_mae.append(t_mae.item())
+            test_rmse.append(t_rmse.item())
+            test_mape.append(t_mape.item())
+
+    print(f"Final Test Results ({args.dataset_type}):")
+    print(f"MAE : {np.mean(test_mae):.4f}")
+    print(f"RMSE: {np.mean(test_rmse):.4f}")
+    print(f"MAPE: {np.mean(test_mape):.4f}")
+
+
+if __name__ == "__main__":
+    main()

@@ -59,6 +59,7 @@ def get_dataloader(args):
     # 1. 空间划分 (Square Partition) - 核心修改部分
     # -------------------------------------------------------
     meta_path = os.path.join(args.dataset_root,args.meta_file)
+    print(f"正在读取元数据文件: {args.meta_file}")
     print(f"正在读取元数据文件: {meta_path}")
     if not os.path.exists(meta_path):
         raise FileNotFoundError(f"找不到元数据文件: {meta_path}")
