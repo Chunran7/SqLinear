@@ -28,11 +28,13 @@ class Node:
 # ==========================================
 
 class TrafficDataset(Dataset):
-    def __init__(self, raw_data, indices, input_len, pred_len):
+    def __init__(self, raw_data, indices, input_len, pred_len, steps_per_day=96):
+        # 注意：因为是 15分钟数据，steps_per_day = 24 * 4 = 96 (不再是 288)
         self.raw_data = raw_data
         self.indices = indices
         self.input_len = input_len
         self.pred_len = pred_len
+        self.steps_per_day = steps_per_day
 
     def __len__(self):
         return len(self.indices)
@@ -41,11 +43,37 @@ class TrafficDataset(Dataset):
         t = self.indices[index]
         x_end = t + self.input_len
         y_end = x_end + self.pred_len
-
-        x = self.raw_data[t: x_end]
-        y = self.raw_data[x_end: y_end]
-
-        return torch.FloatTensor(x), torch.FloatTensor(y)
+        
+        # 1. 获取物理特征 (Flow, Occ, Spd) - 已经是归一化过的
+        x_phys = self.raw_data[t : x_end] # (12, N, 3)
+        
+        # Y 通常只需要预测 Flow (第0个特征)，但也需要反归一化
+        # 这里我们取所有特征，Loss计算时只取第0个，或者只返回第0个
+        y_phys = self.raw_data[x_end : y_end] # (12, N, 3)
+        
+        # 2. 生成时间特征 (Time Embedding)
+        # 生成 t 到 t+12 的时间索引
+        time_indices = np.arange(t, x_end)
+        
+        # 计算 Time of Day (归一化到 0-1)
+        tod = (time_indices % self.steps_per_day) / self.steps_per_day  # (12,)
+        # 计算 Day of Week (归一化到 0-1)
+        dow = ((time_indices // self.steps_per_day) % 7) / 7  # (12,)
+        
+        # 3. 拼接特征
+        # 目标: (12, N, 5)
+        N = x_phys.shape[1]
+        
+        # 扩展时间特征维度: (12,) -> (12, N, 1)
+        tod_expand = np.tile(tod[:, np.newaxis, np.newaxis], (1, N, 1))
+        dow_expand = np.tile(dow[:, np.newaxis, np.newaxis], (1, N, 1))
+        
+        # 拼接: [Phys(3), ToD(1), DoW(1)] -> Total 5
+        x_combined = np.concatenate([x_phys, tod_expand, dow_expand], axis=-1)
+        
+        # Y 不需要时间特征，只需要流量(第0维)用于计算 Loss
+        # 但为了保持形状一致性，我们先返回完整的，Train里再切片
+        return torch.FloatTensor(x_combined), torch.FloatTensor(y_phys)
 
 
 # ==========================================
@@ -115,37 +143,33 @@ def get_dataloader(args):
     idx_val = np.load(os.path.join(data_year, 'idx_val.npy'))
     idx_test = np.load(os.path.join(data_year, 'idx_test.npy'))
 
-    # -------------------------------------------------------
-    # 3. 数据标准化
-    # -------------------------------------------------------
-    sample_indices = idx_train[::10]
-    sample_data = []
-    for t in sample_indices:
-        if t + args.input_len <= raw_data.shape[0]:
-            sample_data.append(raw_data[t: t + args.input_len])
+    # [修改] 读取 his.npz
+    data_dir = os.path.join(args.dataset_root, args.dataset_type, args.year_folder)
+    his_path = os.path.join(data_dir, 'his.npz')
+    
+    raw = np.load(his_path, allow_pickle=True)
+    # 根据你的 inspect 结果，key 包含 'data', 'mean', 'std'
+    raw_data = raw['data'] # (35040, 716, 3)
+    
+    # [关键] 读取预存的 mean/std 用于后续反归一化
+    # 注意：mean/std 的形状可能是 (1, 1, 3) 或 (3,)
+    scaler_mean = raw['mean']
+    scaler_std = raw['std']
+    
+    print(f"加载预处理数据: Mean shape {scaler_mean.shape}, Std shape {scaler_std.shape}")
 
-    if len(sample_data) > 0:
-        sample_stack = np.concatenate(sample_data, axis=0)
-        mean = sample_stack.mean(axis=(0, 1), keepdims=True)
-        std = sample_stack.std(axis=(0, 1), keepdims=True)
-    else:
-        mean = raw_data.mean()
-        std = raw_data.std()
+    # [关键] 严禁在此处再次归一化！数据已经是 Z-Score 过的了！
 
-    raw_data_norm = (raw_data - mean) / std
-
-    # -------------------------------------------------------
-    # 4. 封装 DataLoader
-    # -------------------------------------------------------
-    train_set = TrafficDataset(raw_data_norm, idx_train, args.input_len, args.pred_len)
-    val_set = TrafficDataset(raw_data_norm, idx_val, args.input_len, args.pred_len)
-    test_set = TrafficDataset(raw_data_norm, idx_test, args.input_len, args.pred_len)
+    # 封装 Dataset (注意 steps_per_day=96)
+    train_set = TrafficDataset(raw_data, idx_train, args.input_len, args.pred_len, steps_per_day=96)
+    val_set   = TrafficDataset(raw_data, idx_val,   args.input_len, args.pred_len, steps_per_day=96)
+    test_set  = TrafficDataset(raw_data, idx_test,  args.input_len, args.pred_len, steps_per_day=96)
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
+    val_loader   = DataLoader(val_set,   batch_size=args.batch_size, shuffle=False)
+    test_loader  = DataLoader(test_set,  batch_size=args.batch_size, shuffle=False)
 
-    scaler_info = {'mean': mean, 'std': std}
+    scaler_info = {'mean': scaler_mean, 'std': scaler_std}
 
     # 返回处理好的 partition_idx 供模型使用
     return train_loader, val_loader, test_loader, partition_idx, scaler_info

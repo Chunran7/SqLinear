@@ -25,10 +25,10 @@ def main():
     # 2. 加载数据 (自动处理 Partition 和 Scaling)
     train_loader, val_loader, test_loader, partition_idx, scaler_info = get_dataloader(args)
 
-    # 将 scaler 的均值和方差转为 Tensor，用于反归一化
-    # 形状通常是 (1, 1, 1, 1) 或者 (1, 1, N, 1)，取决于你的标准化方式
-    mean = torch.FloatTensor(scaler_info['mean']).to(device)
-    std = torch.FloatTensor(scaler_info['std']).to(device)
+    # [修改] 获取标量 mean/std
+    # 不需要转 Tensor，因为它们是标量，PyTorch 支持 Tensor 和 scalar 运算
+    mean = scaler_info['mean']
+    std = scaler_info['std']
 
     # 3. 初始化模型
     # 必须将 partition_idx 转为 LongTensor 并移至 GPU
@@ -44,6 +44,21 @@ def main():
         input_len=args.input_len,
         output_len=args.pred_len,
     ).to(device)
+
+    # 辅助函数：只处理 Flow 通道的重排
+    def reorder_target_flow(y_full, partition_idx):
+        # y_full: (B, T, N, 3)
+        # 1. 只取 Flow (Channel 0)
+        y_flow = y_full[..., 0:1] # (B, T, N, 1)
+        
+        # 2. 重排
+        B, T, N, D = y_flow.shape
+        y_flow = y_flow.permute(0, 1, 3, 2) # (B, T, 1, N)
+        
+        idx = partition_idx.view(1, 1, 1, -1).expand(B, T, D, -1)
+        y_ordered = torch.gather(y_flow, -1, idx) # (B, T, 1, N_padded)
+        
+        return y_ordered.permute(0, 1, 3, 2) # (B, T, N_padded, 1)
 
     # 4. 优化器配置 (参考论文常见设置)
     # 通常使用 Adam，学习率 1e-3，权重衰减 1e-4
@@ -69,24 +84,24 @@ def main():
         # --- Training Step ---
         model.train()
         for x, y in train_loader:
-            x = x.to(device)  # (B, T_in, N, D) - Scaled
-            y = y.to(device)  # (B, T_out, N, D) - Scaled
-
+            x = x.to(device) # (B, 12, N, 5)
+            y = y.to(device) # (B, 12, N, 3)
+            
             optimizer.zero_grad()
-
-            # Forward
-            preds = model(x)  # (B, T_out, N, D)
-
-            # 论文复现细节：
-            # 大多数代码库(如GraphWaveNet)使用"标准化后的 Masked MAE"作为反向传播的 Loss
-            # 因为这能保证梯度稳定。
-            loss = masked_mae(preds, y, null_val=0.0)
-
+            
+            # Forward: 模型输出的是 Flow 预测 (B, 12, N_p, 1)
+            preds = model(x)
+            
+            # Target: 提取 Flow 并重排 (B, 12, N_p, 1)
+            y_target = reorder_target_flow(y, partition_idx_tensor)
+            
+            # 计算 Loss (标准化空间)
+            loss = masked_mae(preds, y_target, null_val=0.0)
+            
             loss.backward()
-
             # 梯度裁剪 (Gradient Clipping) - 防止梯度爆炸
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-
+            
             optimizer.step()
             train_loss_list.append(loss.item())
 
@@ -103,14 +118,15 @@ def main():
             for x, y in val_loader:
                 x = x.to(device)
                 y = y.to(device)
-
+                
                 preds = model(x)
-
-                # 反归一化 (Inverse Transform)
-                # real_value = scaled_value * std + mean
+                y_target = reorder_target_flow(y, partition_idx_tensor)
+                
+                # [关键] 反归一化
+                # 因为 mean/std 是标量，这里直接运算即可，不需要考虑维度广播
                 preds_real = preds * std + mean
-                y_real = y * std + mean
-
+                y_real = y_target * std + mean
+                
                 # 计算真实误差
                 v_mae = masked_mae(preds_real, y_real, null_val=0.0)
                 v_rmse = masked_rmse(preds_real, y_real, null_val=0.0)
@@ -158,10 +174,11 @@ def main():
             y = y.to(device)
 
             preds = model(x)
+            y_target = reorder_target_flow(y, partition_idx_tensor)
 
             # 反归一化
             preds_real = preds * std + mean
-            y_real = y * std + mean
+            y_real = y_target * std + mean
 
             t_mae = masked_mae(preds_real, y_real, null_val=0.0)
             t_rmse = masked_rmse(preds_real, y_real, null_val=0.0)
