@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
+import config
 
 from core.partition import separate_partitions
 
@@ -58,9 +59,7 @@ def get_dataloader(args):
     # -------------------------------------------------------
     # 1. 空间划分 (Square Partition) - 核心修改部分
     # -------------------------------------------------------
-    meta_path = os.path.join(args.dataset_root,args.meta_file)
-    print(f"正在读取元数据文件: {args.meta_file}")
-    print(f"正在读取元数据文件: {meta_path}")
+    meta_path = os.path.join(args.dataset_root,args.dataset_type,args.meta_file)
     if not os.path.exists(meta_path):
         raise FileNotFoundError(f"找不到元数据文件: {meta_path}")
 

@@ -1,11 +1,12 @@
-from core.layers import SpatioTemporalEmbedding
+from core.layers import SpatioTemporalEmbedding, HLIBlock
 import torch.nn as nn
 
 class SqLinear(nn.Module):
-    def __init__(self, num_nodes, num_patches, patch_size,
+    def __init__(self, num_nodes, patch_size,
                  input_dim=1, output_dim=1,
                  hidden_dim=64, num_layers=4,
-                 input_len=12, output_len=12):
+                 input_len=12, output_len=12,
+                 partition_idx=None):
         """
         Args:
             num_nodes: 716
@@ -15,10 +16,15 @@ class SqLinear(nn.Module):
             output_dim: 1 (预测流量)
             hidden_dim: 模型内部特征维度 (比如 64)
             num_layers: HLI 层数 (比如 4)
+            partition_idx: 空间划分索引
         """
         super().__init__()
         self.patch_size = patch_size
-        self.num_patches = num_patches
+        self.num_patches = num_nodes//patch_size
+        
+        # 保存分区索引（如果提供了的话）
+        if partition_idx is not None:
+            self.partition_idx = partition_idx
 
         # 1. 嵌入层
         # 注意：Embedding层最后会拼接 4 个特征。
@@ -28,12 +34,12 @@ class SqLinear(nn.Module):
         self.embedding = SpatioTemporalEmbedding(
             input_dim=input_dim,
             hidden_dim=emb_dim,
-            num_nodes=num_nodes
+            #num_nodes=num_nodes
         )
 
         # 2. 核心层 (堆叠 L 层 HLI)
         self.layers = nn.ModuleList([
-            HLIBlock(hidden_dim, num_patches, patch_size)
+            HLIBlock(hidden_dim, self.num_patches, patch_size)
             for _ in range(num_layers)
         ])
 

@@ -35,14 +35,14 @@ def main():
     partition_idx_tensor = torch.LongTensor(partition_idx).to(device)
 
     model = SqLinear(
-        num_nodes=args.num_nodes,
+        args.num_nodes,
+        args.patch_capacity,
         input_dim=args.input_dim,
         hidden_dim=args.hidden_dim,
         partition_idx=partition_idx_tensor,  # <--- 核心：空间划分索引
-        patch_capacity=args.patch_capacity,
         num_layers=args.num_layers,
         input_len=args.input_len,
-        pred_len=args.pred_len
+        output_len=args.pred_len,
     ).to(device)
 
     # 4. 优化器配置 (参考论文常见设置)
