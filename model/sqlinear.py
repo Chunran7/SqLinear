@@ -38,9 +38,13 @@ class SqLinear(nn.Module):
         # 为了让拼接后的总维度等于 hidden_dim，我们这里传入 hidden_dim // 4
         # 比如 hidden_dim=64, 那每个子特征就是 16, 16*4=64
         emb_dim = hidden_dim // 4
+        physical_feature_dim = 3
+
+
         self.embedding = SpatioTemporalEmbedding(
-            input_dim=input_dim,
+            input_dim=physical_feature_dim,
             hidden_dim=emb_dim,
+
             # num_nodes=self.effective_num_nodes # 如果你的 Embedding 需要节点 ID，用这个
         )
 
