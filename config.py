@@ -14,7 +14,7 @@ def get_args():
     # --- 数据处理参数 (LargeST Benchmark Setting) ---
     parser.add_argument('--input_len', type=int, default=12, help='历史时间步长度')
     parser.add_argument('--pred_len', type=int, default=12, help='预测时间步长度')
-    parser.add_argument('--batch_size', type=int, default=32, help='批次大小')
+    parser.add_argument('--batch_size', type=int, default=16, help='批次大小')
     parser.add_argument('--num_nodes', type=int, default=716, help='节点(传感器)数量，SD=716')
 
     # --- SqLinear 模型核心参数 ---
