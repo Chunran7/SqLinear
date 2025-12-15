@@ -122,13 +122,17 @@ def main():
         val_mae_list = []
         val_rmse_list = []
 
+
+
         with torch.no_grad():
-            for x, y in val_loader:
-                x = x.to(device)
-                y = y.to(device)
+            for x_phys, t_day, t_week, y_phys in val_loader:
+                x_phys = x_phys.to(device)  # Float
+                t_day = t_day.to(device)    # Long
+                t_week = t_week.to(device)  # Long
+                y_phys = y_phys.to(device)  # Float
                 
-                preds = model(x)
-                y_target = reorder_target_flow(y, partition_idx_tensor)
+                preds = model(x_phys, t_day, t_week)
+                y_target = reorder_target_flow(y_phys, partition_idx_tensor)
                 
                 # [关键] 反归一化
                 # 因为 mean/std 是标量，这里直接运算即可，不需要考虑维度广播
@@ -177,12 +181,14 @@ def main():
     test_mape = []
 
     with torch.no_grad():
-        for x, y in test_loader:
-            x = x.to(device)
-            y = y.to(device)
+        for x_phys, t_day, t_week, y_phys in test_loader:
+            x_phys = x_phys.to(device)  # Float
+            t_day = t_day.to(device)    # Long
+            t_week = t_week.to(device)  # Long
+            y_phys = y_phys.to(device)  # Float
 
-            preds = model(x)
-            y_target = reorder_target_flow(y, partition_idx_tensor)
+            preds = model(x_phys, t_day, t_week)
+            y_target = reorder_target_flow(y_phys, partition_idx_tensor)
 
             # 反归一化
             preds_real = preds * std + mean
