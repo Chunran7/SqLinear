@@ -1,30 +1,37 @@
+import torch
 from core.layers import SpatioTemporalEmbedding, HLIBlock
 import torch.nn as nn
 
 class SqLinear(nn.Module):
-    def __init__(self, num_nodes, patch_size,
+    def __init__(self, original_num_nodes, patch_size,
                  input_dim=1, output_dim=1,
                  hidden_dim=64, num_layers=4,
                  input_len=12, output_len=12,
                  partition_idx=None):
         """
         Args:
-            num_nodes: 716
-            num_patches: 179 (716/4)
-            patch_size: 4
-            input_dim: 1 (原始流量)
-            output_dim: 1 (预测流量)
-            hidden_dim: 模型内部特征维度 (比如 64)
-            num_layers: HLI 层数 (比如 4)
-            partition_idx: 空间划分索引
+            original_num_nodes: 原始节点数 (e.g., 716)
+            partition_idx: 包含 Padding 的重排索引 (长度 >= 716)
         """
         super().__init__()
         self.patch_size = patch_size
-        self.num_patches = num_nodes//patch_size
         
-        # 保存分区索引（如果提供了的话）
+        # [修改 1] 处理 Partition Index 和 Padding 后的节点数
         if partition_idx is not None:
-            self.partition_idx = partition_idx
+            # 注册为 buffer，自动随模型移动到 GPU
+            self.register_buffer('partition_idx', torch.LongTensor(partition_idx))
+            # 模型的有效节点数 = 索引的长度 (包含了 Padding)
+            self.effective_num_nodes = len(partition_idx)
+        else:
+            self.partition_idx = None
+            self.effective_num_nodes = original_num_nodes
+
+        # 计算 Patch 数量 (基于填充后的节点数)
+        self.num_patches = self.effective_num_nodes // patch_size
+        
+        print(f"Model Init: Original Nodes={original_num_nodes}, "
+              f"Effective Nodes (Padded)={self.effective_num_nodes}, "
+              f"Patches={self.num_patches}")
 
         # 1. 嵌入层
         # 注意：Embedding层最后会拼接 4 个特征。
@@ -34,7 +41,7 @@ class SqLinear(nn.Module):
         self.embedding = SpatioTemporalEmbedding(
             input_dim=input_dim,
             hidden_dim=emb_dim,
-            #num_nodes=num_nodes
+            # num_nodes=self.effective_num_nodes # 如果你的 Embedding 需要节点 ID，用这个
         )
 
         # 2. 核心层 (堆叠 L 层 HLI)
@@ -52,14 +59,43 @@ class SqLinear(nn.Module):
         # 直接用 Linear 映射时间轴
         self.time_proj = nn.Linear(input_len, output_len)
 
-    def forward(self, x, t_day, t_week):
-        # 输入 x: (Batch, Time, Nodes, 1)
+    def forward(self, x_in):
+        """
+        Args:
+            x_in: (B, T, N_orig, 5) -> [Flow, Occ, Spd, ToD, DoW]
+        Returns:
+            out: (B, T, N_padded, 1) -> 预测结果是重排且包含 Padding 的
+        """
+        # [修改 3] 切片提取需要的特征
+        # Channel 0: Flow (输入特征)
+        # Channel 3: Time of Day
+        # Channel 4: Day of Week
+        val = x_in[..., 0:1]    # (B, T, N_orig, 1)
+        t_day = x_in[..., 3:4]  # (B, T, N_orig, 1)
+        t_week = x_in[..., 4:5] # (B, T, N_orig, 1)
+
+        # [修改 4] 空间重排 (Reordering & Padding)
+        # 将数据从 N_orig 映射到 N_padded
+        if self.partition_idx is not None:
+            B, T, _, D = val.shape
+            # partition_idx: (N_padded,) -> 扩展为 (1, 1, N_padded, 1)
+            idx = self.partition_idx.view(1, 1, -1, 1)
+            
+            # 扩展 idx 以匹配 Batch 和 Time
+            # 注意：gather 的 dim=2 是节点维度
+            idx_val = idx.expand(B, T, -1, D)
+            idx_t = idx.expand(B, T, -1, 1)
+
+            # 执行 Gather: 输出形状变为 (B, T, N_padded, 1)
+            val = torch.gather(val, 2, idx_val)
+            t_day = torch.gather(t_day, 2, idx_t)
+            t_week = torch.gather(t_week, 2, idx_t)
 
         # ====================================
         # Step 1: Embedding (特征增强)
         # ====================================
         # Out: (B, T, N, Hidden)
-        x = self.embedding(x, t_day, t_week)
+        x = self.embedding(val, t_day, t_week)
 
         # ====================================
         # Step 2: Patching (变形)
@@ -68,7 +104,7 @@ class SqLinear(nn.Module):
         # 我们的 DataLoader 已经把节点按顺序排好了，
         # 所以这里只需要简单的 Reshape (View)
         # (B, T, N, H) -> (B, T, P, C, H)
-        B, T, N, H = x.shape
+        B, T, N_pad, H = x.shape
         x = x.view(B, T, self.num_patches, self.patch_size, H)
 
         # ====================================
@@ -82,7 +118,7 @@ class SqLinear(nn.Module):
         # ====================================
         # 4.1 Unpatch (还原形状) - 对应 Eq. 15
         # (B, T, P, C, H) -> (B, T, N, H)
-        x = x.view(B, T, N, H)
+        x = x.view(B, T, N_pad, H)
 
         # 4.2 预测特征 (Regression) - 对应 Eq. 16
         # 先把特征维变成 1: (B, T, N, H) -> (B, T, N, 1)
