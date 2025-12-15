@@ -54,11 +54,13 @@ class TrafficDataset(Dataset):
         # 2. 生成时间特征 (Time Embedding)
         # 生成 t 到 t+12 的时间索引
         time_indices = np.arange(t, x_end)
-        
-        # 计算 Time of Day (归一化到 0-1)
-        tod = (time_indices % self.steps_per_day) / self.steps_per_day  # (12,)
-        # 计算 Day of Week (归一化到 0-1)
-        dow = ((time_indices // self.steps_per_day) % 7) / 7  # (12,)
+
+        # data_loader.py 修改建议
+        # 不要除以 total_steps，直接保留整数索引
+        tod = (time_indices % self.steps_per_day)
+        dow = (time_indices // self.steps_per_day) % 7
+        # 后面拼接时不需要扩展维度成 float，可以直接作为 int64 Tensor 返回，
+        # 或者把它们单独返回，不要和 float 类型的 x_phys 拼接到同一个 Tensor 里（Tensor 只能有一种数据类型）
         
         # 3. 拼接特征
         # 目标: (12, N, 5)

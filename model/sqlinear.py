@@ -70,7 +70,7 @@ class SqLinear(nn.Module):
         # Channel 0: Flow (输入特征)
         # Channel 3: Time of Day
         # Channel 4: Day of Week
-        val = x_in[..., 0:1]    # (B, T, N_orig, 1)
+        val = x_in[..., 0:3]    # (B, T, N_orig, 1)
         t_day = x_in[..., 3:4]  # (B, T, N_orig, 1)
         t_week = x_in[..., 4:5] # (B, T, N_orig, 1)
 
