@@ -7,6 +7,7 @@ from config import get_args
 from utils.data_loader import get_dataloader
 from utils.metrics import masked_mae, masked_rmse, masked_mape
 from model.sqlinear import SqLinear
+from tqdm import tqdm
 
 
 def main():
@@ -83,14 +84,19 @@ def main():
 
         # --- Training Step ---
         model.train()
-        for x, y in train_loader:
-            x = x.to(device) # (B, 12, N, 5)
-            y = y.to(device) # (B, 12, N, 3)
-            
+
+        train_pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}", leave=True)
+
+        for x, t_d, t_w, y in train_loader:
+            x = x.to(device)  # Float
+            t_d = t_d.to(device)  # Long
+            t_w = t_w.to(device)  # Long
+            y = y.to(device)  # Float
+
             optimizer.zero_grad()
-            
-            # Forward: 模型输出的是 Flow 预测 (B, 12, N_p, 1)
-            preds = model(x)
+
+            # [修改] 传入 3 个参数
+            preds = model(x, t_d, t_w)
             
             # Target: 提取 Flow 并重排 (B, 12, N_p, 1)
             y_target = reorder_target_flow(y, partition_idx_tensor)
@@ -104,6 +110,8 @@ def main():
             
             optimizer.step()
             train_loss_list.append(loss.item())
+
+            train_pbar.set_postfix({'loss': f"{loss.item():.4f}"})
 
         # 更新学习率
         scheduler.step()

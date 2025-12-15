@@ -63,38 +63,33 @@ class SqLinear(nn.Module):
         # 直接用 Linear 映射时间轴
         self.time_proj = nn.Linear(input_len, output_len)
 
-    def forward(self, x_in):
+    def forward(self, x_phys, t_day, t_week):  # <--- 接收 3 个输入
         """
         Args:
-            x_in: (B, T, N_orig, 5) -> [Flow, Occ, Spd, ToD, DoW]
-        Returns:
-            out: (B, T, N_padded, 1) -> 预测结果是重排且包含 Padding 的
+            x_phys: (B, T, N, 3) Float
+            t_day:  (B, T, N, 1) Long
+            t_week: (B, T, N, 1) Long
         """
-        # [修改 3] 切片提取需要的特征
-        # Channel 0: Flow (输入特征)
-        # Channel 3: Time of Day
-        # Channel 4: Day of Week
-        val = x_in[..., 0:3]    # (B, T, N_orig, 1)
-        t_day = x_in[..., 3:4]  # (B, T, N_orig, 1)
-        t_week = x_in[..., 4:5] # (B, T, N_orig, 1)
+        # 不再需要切片 val = x_in[...]，直接使用传入的变量
+        val = x_phys
 
-        # [修改 4] 空间重排 (Reordering & Padding)
-        # 将数据从 N_orig 映射到 N_padded
+        # 空间重排 (Reordering & Padding)
         if self.partition_idx is not None:
             B, T, _, D = val.shape
-            # partition_idx: (N_padded,) -> 扩展为 (1, 1, N_padded, 1)
-            idx = self.partition_idx.view(1, 1, -1, 1)
-            
-            # 扩展 idx 以匹配 Batch 和 Time
-            # 注意：gather 的 dim=2 是节点维度
-            idx_val = idx.expand(B, T, -1, D)
-            idx_t = idx.expand(B, T, -1, 1)
 
-            # 执行 Gather: 输出形状变为 (B, T, N_padded, 1)
+            # 扩展 partition_idx
+            idx = self.partition_idx.view(1, 1, -1, 1)
+            idx_val = idx.expand(B, T, -1, D)  # for x_phys (3 channels)
+            idx_t = idx.expand(B, T, -1, 1)  # for time (1 channel)
+
+            # 对所有输入都进行 Gather
             val = torch.gather(val, 2, idx_val)
             t_day = torch.gather(t_day, 2, idx_t)
             t_week = torch.gather(t_week, 2, idx_t)
 
+        # Step 1: Embedding
+        # 现在传入的 t_day 是 Long 类型，且维度正确，不会报错
+        x = self.embedding(val, t_day, t_week)
         # ====================================
         # Step 1: Embedding (特征增强)
         # ====================================

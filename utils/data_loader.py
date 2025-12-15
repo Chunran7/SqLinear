@@ -29,7 +29,7 @@ class Node:
 
 class TrafficDataset(Dataset):
     def __init__(self, raw_data, indices, input_len, pred_len, steps_per_day=96):
-        # 注意：因为是 15分钟数据，steps_per_day = 24 * 4 = 96 (不再是 288)
+        # 注意：因为是 15分钟数据，steps_per_day = 24 * 4 = 96
         self.raw_data = raw_data
         self.indices = indices
         self.input_len = input_len
@@ -43,39 +43,31 @@ class TrafficDataset(Dataset):
         t = self.indices[index]
         x_end = t + self.input_len
         y_end = x_end + self.pred_len
-        
-        # 1. 获取物理特征 (Flow, Occ, Spd) - 已经是归一化过的
-        x_phys = self.raw_data[t : x_end] # (12, N, 3)
-        
-        # Y 通常只需要预测 Flow (第0个特征)，但也需要反归一化
-        # 这里我们取所有特征，Loss计算时只取第0个，或者只返回第0个
-        y_phys = self.raw_data[x_end : y_end] # (12, N, 3)
-        
-        # 2. 生成时间特征 (Time Embedding)
-        # 生成 t 到 t+12 的时间索引
+
+        # 1. 物理特征 (Flow, Occ, Spd) -> Float
+        # 这里只取前 3 维，确保不混入时间
+        x_phys = torch.FloatTensor(self.raw_data[t: x_end, :, :3])
+        y_phys = torch.FloatTensor(self.raw_data[x_end: y_end, :, :3])
+
+        # 2. 生成时间特征 (Time Embedding) -> Long (整数索引)
         time_indices = np.arange(t, x_end)
 
-        # data_loader.py 修改建议
-        # 不要除以 total_steps，直接保留整数索引
-        tod = (time_indices % self.steps_per_day)
-        dow = (time_indices // self.steps_per_day) % 7
-        # 后面拼接时不需要扩展维度成 float，可以直接作为 int64 Tensor 返回，
-        # 或者把它们单独返回，不要和 float 类型的 x_phys 拼接到同一个 Tensor 里（Tensor 只能有一种数据类型）
-        
-        # 3. 拼接特征
-        # 目标: (12, N, 5)
+        # [关键修改] 不要除以 steps_per_day，保留整数！
+        tod = time_indices % self.steps_per_day  # range [0, 95]
+        dow = (time_indices // self.steps_per_day) % 7  # range [0, 6]
+
+        # 转为 Tensor
+        tod = torch.LongTensor(tod)
+        dow = torch.LongTensor(dow)
+
+        # 3. 扩展维度以匹配物理特征: (T,) -> (T, N, 1)
+        # 这样方便模型里的 gather 操作
         N = x_phys.shape[1]
-        
-        # 扩展时间特征维度: (12,) -> (12, N, 1)
-        tod_expand = np.tile(tod[:, np.newaxis, np.newaxis], (1, N, 1))
-        dow_expand = np.tile(dow[:, np.newaxis, np.newaxis], (1, N, 1))
-        
-        # 拼接: [Phys(3), ToD(1), DoW(1)] -> Total 5
-        x_combined = np.concatenate([x_phys, tod_expand, dow_expand], axis=-1)
-        
-        # Y 不需要时间特征，只需要流量(第0维)用于计算 Loss
-        # 但为了保持形状一致性，我们先返回完整的，Train里再切片
-        return torch.FloatTensor(x_combined), torch.FloatTensor(y_phys)
+        tod = tod.view(-1, 1, 1).expand(-1, N, 1)
+        dow = dow.view(-1, 1, 1).expand(-1, N, 1)
+
+        # [关键修改] 返回 4 个独立变量，不再拼接
+        return x_phys, tod, dow, y_phys
 
 
 # ==========================================

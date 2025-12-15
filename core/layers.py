@@ -32,44 +32,33 @@ class SpatioTemporalEmbedding(nn.Module):
 
     def forward(self, x, t_day, t_week):
         """
-        x: (Batch, Time, Nodes, In_Dim) -> 原始流量
-        t_day: (Batch, Time, 1) -> 每天的时间索引 (0-287)
-        t_week: (Batch, Time, 1) -> 每周的时间索引 (0-6)
-        注意：不需要传入 node_idx，因为是自适应空间嵌入
+        x: (Batch, Time, Nodes, In_Dim)
+        t_day: (Batch, Time, Nodes, 1) <--- 注意这里由 data_loader 保证了维度
+        t_week: (Batch, Time, Nodes, 1)
         """
         batch, time, nodes, _ = x.shape
 
-        # -------------------------------
-        # 1. 流量嵌入 (Data)
-        # -------------------------------
-        # Conv2d 需要 (B, C, H, W) 格式 -> (B, In_Dim, T, N)
-        # 主要是调整各个维度的顺序，适配 Conv2d 的输入要求
+        # 1. 流量嵌入
         x_perm = x.permute(0, 3, 1, 2)
-        h_data = self.token_emb(x_perm).permute(0, 2, 3, 1)  # -> (B, T, N, Hidden)
+        h_data = self.token_emb(x_perm).permute(0, 2, 3, 1)  # (B, T, N, H)
 
-        # -------------------------------
-        # 2. 时间嵌入 (Temporal)
-        # -------------------------------
-        # t_day: (B, T, 1) -> squeeze -> (B, T) -> emb -> (B, T, Hidden)
+        # 2. 时间嵌入
+        # t_day 是 LongTensor (B, T, N, 1) -> squeeze -> (B, T, N)
+        # Embedding -> (B, T, N, H)
         h_day = self.day_emb(t_day.squeeze(-1))
-        # 广播到每个节点: (B, T, 1, H) -> (B, T, N, H)
-        h_day = h_day.unsqueeze(2).expand(-1, -1, nodes, -1)
+
+        # [删除/注释掉这行] 因为输入已经包含了 N 维度，不需要再 unsqueeze/expand
+        # h_day = h_day.unsqueeze(2).expand(-1, -1, nodes, -1) <--- 删除！
 
         h_week = self.week_emb(t_week.squeeze(-1))
-        h_week = h_week.unsqueeze(2).expand(-1, -1, nodes, -1)
+        # [删除/注释掉这行]
+        # h_week = h_week.unsqueeze(2).expand(-1, -1, nodes, -1) <--- 删除！
 
-        # -------------------------------
-        # 3. 空间嵌入 (Spatial - Adaptive)
-        # -------------------------------
-        # 对应公式 (4): sigma(W * X + b)
-        # x: (B, T, N, 1) -> Linear -> (B, T, N, Hidden)
+        # 3. 空间嵌入
         h_spatial = self.spatial_linear(x)
-        h_spatial = F.relu(h_spatial)  # sigma 激活函数
+        h_spatial = F.relu(h_spatial)
 
-        # -------------------------------
-        # 4. 融合 (Concatenate)
-        # -------------------------------
-        # 对应公式 (5)
+        # 4. 融合 (B, T, N, 4H)
         hidden = torch.cat([h_data, h_day, h_week, h_spatial], dim=-1)
 
         return hidden
