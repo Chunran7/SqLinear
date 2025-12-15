@@ -40,6 +40,8 @@ class TrafficDataset(Dataset):
         return len(self.indices)
 
     def __getitem__(self, index):
+
+        # 滑动窗口
         t = self.indices[index]
         x_end = t + self.input_len
         y_end = x_end + self.pred_len
