@@ -86,9 +86,9 @@ def main():
         model.train()
 
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}", leave=True)
-        
-        # 临时修改：只运行几个批次用于测试
-        batch_count = 0
+
+
+
         for x, t_d, t_w, y in train_loader:
             x = x.to(device)  # Float
             t_d = t_d.to(device)  # Long
@@ -114,11 +114,6 @@ def main():
             train_loss_list.append(loss.item())
 
             train_pbar.set_postfix({'loss': f"{loss.item():.4f}"})
-            
-            # 临时修改：只运行几个批次用于测试
-            batch_count += 1
-            if batch_count >= 5:  # 只运行5个批次
-                break
 
         # 更新学习率
         scheduler.step()
@@ -129,8 +124,8 @@ def main():
         val_mae_list = []
         val_rmse_list = []
 
-        # 临时修改：只运行几个批次用于测试
-        val_batch_count = 0
+
+
         with torch.no_grad():
             for x_phys, t_day, t_week, y_phys in val_loader:
                 x_phys = x_phys.to(device)  # Float
@@ -152,11 +147,6 @@ def main():
 
                 val_mae_list.append(v_mae.item())
                 val_rmse_list.append(v_rmse.item())
-                
-                # 临时修改：只运行几个批次用于测试
-                val_batch_count += 1
-                if val_batch_count >= 5:  # 只运行5个批次
-                    break
 
         train_loss = np.mean(train_loss_list)
         val_mae = np.mean(val_mae_list)
@@ -181,11 +171,6 @@ def main():
             if patience_count >= max_patience:
                 print(f"  >>> Early stopping triggered at epoch {epoch + 1}")
                 break
-                
-        # 临时修改：快速测试模式下只运行很少的epochs
-        if epoch >= 2:  # 只运行3个epochs进行测试
-            print("快速测试完成，提前结束训练以节省时间")
-            break
 
     # --- Final Test Step ---
     print("\n--- Starting Final Testing ---")
@@ -197,8 +182,6 @@ def main():
     test_rmse = []
     test_mape = []
 
-    # 临时修改：只运行几个批次用于测试
-    test_batch_count = 0
     with torch.no_grad():
         for x_phys, t_day, t_week, y_phys in test_loader:
             x_phys = x_phys.to(device)  # Float
@@ -220,17 +203,11 @@ def main():
             test_mae.append(t_mae.item())
             test_rmse.append(t_rmse.item())
             test_mape.append(t_mape.item())
-            
-            # 临时修改：只运行几个批次用于测试
-            test_batch_count += 1
-            if test_batch_count >= 5:  # 只运行5个批次
-                break
 
     print(f"Final Test Results ({args.dataset_type}):")
     print(f"MAE : {np.mean(test_mae):.4f}")
     print(f"RMSE: {np.mean(test_rmse):.4f}")
     print(f"MAPE: {np.mean(test_mape):.4f}")
-    print("快速测试完成！")
 
 
 if __name__ == "__main__":
