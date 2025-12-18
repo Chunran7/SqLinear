@@ -36,14 +36,22 @@ def main():
     partition_idx_tensor = torch.LongTensor(partition_idx).to(device)
 
     model = SqLinear(
-        args.num_nodes,
-        args.patch_capacity,
-        input_dim=args.input_dim,
-        hidden_dim=args.hidden_dim,
-        partition_idx=partition_idx_tensor,  # <--- 核心：空间划分索引
+        original_num_nodes=args.num_nodes,
+        patch_size=args.patch_capacity,
+        input_dim=args.input_dim,   # 3
+        
+        # 传入新参数
+        token_dim=args.token_dim,     # 64
+        day_dim=args.day_dim,         # 32
+        week_dim=args.week_dim,       # 32
+        spatial_dim=args.spatial_dim, # 32
+        
+        # hidden_dim 参数已经不再需要直接传入了，模型内部会计算 sum
+        
         num_layers=args.num_layers,
         input_len=args.input_len,
         output_len=args.pred_len,
+        partition_idx=partition_idx_tensor
     ).to(device)
 
     # 辅助函数：只处理 Flow 通道的重排

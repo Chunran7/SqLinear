@@ -4,8 +4,13 @@ import torch.nn as nn
 
 class SqLinear(nn.Module):
     def __init__(self, original_num_nodes, patch_size,
-                 input_dim=1, output_dim=1,
-                 hidden_dim=64, num_layers=4,
+                 input_dim=3,          # 物理特征维度 (Flow, Occ, Spd)
+                 token_dim=64,         # 新增参数
+                 day_dim=32,           # 新增参数
+                 week_dim=32,          # 新增参数
+                 spatial_dim=32,       # 新增参数
+                 output_dim=1,
+                 num_layers=4,
                  input_len=12, output_len=12,
                  partition_idx=None):
         """
@@ -34,30 +39,31 @@ class SqLinear(nn.Module):
               f"Patches={self.num_patches}")
 
         # 1. 嵌入层
-        # 注意：Embedding层最后会拼接 4 个特征。
-        # 为了让拼接后的总维度等于 hidden_dim，我们这里传入 hidden_dim // 4
-        # 比如 hidden_dim=64, 那每个子特征就是 16, 16*4=64
-        emb_dim = hidden_dim // 4
-        physical_feature_dim = 3
-
-
         self.embedding = SpatioTemporalEmbedding(
-            input_dim=physical_feature_dim,
-            hidden_dim=emb_dim,
-
-            # num_nodes=self.effective_num_nodes # 如果你的 Embedding 需要节点 ID，用这个
+            input_dim=input_dim,
+            token_dim=token_dim,
+            day_dim=day_dim,
+            week_dim=week_dim,
+            spatial_dim=spatial_dim
         )
+        
+        # [关键] 计算 HLI Block 需要的总维度
+        # 64 + 32 + 32 + 32 = 160
+        self.total_hidden_dim = self.embedding.output_dim
+
+        print(f"Model Config: Token={token_dim}, Time={day_dim}+{week_dim}, Spatial={spatial_dim}")
+        print(f"Total Hidden Dim for HLI: {self.total_hidden_dim}")
 
         # 2. 核心层 (堆叠 L 层 HLI)
         self.layers = nn.ModuleList([
-            HLIBlock(hidden_dim, self.num_patches, patch_size)
+            HLIBlock(self.total_hidden_dim, self.num_patches, patch_size)
             for _ in range(num_layers)
         ])
 
         # 3. 输出层 (论文 4.4 节)
         # 3.1 特征降维: Hidden(64) -> Output(1)
         # 这里用 1x1 卷积或者 Linear 都可以
-        self.output_proj = nn.Linear(hidden_dim, output_dim)
+        self.output_proj = nn.Linear(self.total_hidden_dim, output_dim)
 
         # 3.2 时间预测: Input_Len(12) -> Output_Len(12)
         # 直接用 Linear 映射时间轴
@@ -87,13 +93,10 @@ class SqLinear(nn.Module):
             t_day = torch.gather(t_day, 2, idx_t)
             t_week = torch.gather(t_week, 2, idx_t)
 
-        # Step 1: Embedding
-        # 现在传入的 t_day 是 Long 类型，且维度正确，不会报错
-        x = self.embedding(val, t_day, t_week)
         # ====================================
         # Step 1: Embedding (特征增强)
         # ====================================
-        # Out: (B, T, N, Hidden)
+        # 现在传入的 t_day 是 Long 类型，且维度正确，不会报错
         x = self.embedding(val, t_day, t_week)
 
         # ====================================

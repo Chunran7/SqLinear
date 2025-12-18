@@ -20,10 +20,16 @@ def get_args():
     # --- SqLinear 模型核心参数 ---
     # [cite: 190, 207] Patch Capacity: 每个正方形小块包含的最大节点数
     parser.add_argument('--patch_capacity', type=int, default=4, help='Leaf node capacity (C)')
-    # [重要修改] 输入维度改为 5 
-    # 3 (Flow, Occ, Spd) + 1 (Time of Day) + 1 (Day of Week)
-    parser.add_argument('--input_dim', type=int, default=5, help='输入特征维度: Flow,Occ,Spd,ToD,DoW')
-    parser.add_argument('--hidden_dim', type=int, default=64, help='模型隐藏层维度')
+    
+    # 论文参数设置 (Appendix C.3)
+    parser.add_argument('--token_dim', type=int, default=64, help='历史数据嵌入维度')
+    parser.add_argument('--day_dim', type=int, default=32, help='日内时间嵌入维度')
+    parser.add_argument('--week_dim', type=int, default=32, help='周内时间嵌入维度')
+    parser.add_argument('--spatial_dim', type=int, default=32, help='空间嵌入维度')
+    
+    # 此时 input_dim 应该是 3 (Flow, Occ, Spd)
+    parser.add_argument('--input_dim', type=int, default=3, help='物理输入特征数')
+    
     # 确保 output_dim 仍然是 1 (我们只预测流量)
     parser.add_argument('--output_dim', type=int, default=1, help='输出特征维度')
     parser.add_argument('--num_layers', type=int, default=3, help='层数')

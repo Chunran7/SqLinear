@@ -4,31 +4,42 @@ import torch.nn.functional as F
 
 
 class SpatioTemporalEmbedding(nn.Module):
-    def __init__(self, input_dim, hidden_dim,
-                 time_of_day_size=288, day_of_week_size=7):
+    def __init__(self, input_dim, 
+                 token_dim=64,    # 论文: 64
+                 day_dim=32,      # 论文: 32
+                 week_dim=32,     # 论文: 32
+                 spatial_dim=32,  # 论文: 32
+                 time_of_day_size=288, 
+                 day_of_week_size=7):
         """
         对应论文 4.1 节
+        根据论文 Appendix C.3 设置:
+        - 历史流量嵌入 (E_H, Token): 维度为 64 (d_h=64)
+        - 日内时间嵌入 (E_T^d, Day): 维度为 32 (d_d=32)
+        - 周内时间嵌入 (E_T^w, Week): 维度为 32 (d_w=32)
+        - 空间嵌入 (E_S, Spatial): 维度为 32 (d_s=32)
+        - 总隐藏维度 (d): 64 + 32 + 32 + 32 = 160
         """
         super().__init__()
 
         # 1. 历史流量嵌入 (Token Embedding) - 对应 Eq. (2)
         # 输入: 流量数值 -> 输出: 隐藏向量
-        self.token_emb = nn.Conv2d(input_dim, hidden_dim, kernel_size=(1, 1), bias=True)
+        self.token_emb = nn.Conv2d(input_dim, token_dim, kernel_size=(1, 1), bias=True)
 
         # 2. 时间嵌入 (Temporal Embedding) - 对应 Eq. (3)
         # 输入: 时间索引 -> 输出: 时间向量
         # 虽然论文提到了 Linear，但对离散索引的标准实现是 Embedding
-        self.day_emb = nn.Embedding(time_of_day_size, hidden_dim)
-        self.week_emb = nn.Embedding(day_of_week_size, hidden_dim)
+        self.day_emb = nn.Embedding(time_of_day_size, day_dim)
+        self.week_emb = nn.Embedding(day_of_week_size, week_dim)
 
         # 3. 空间嵌入 (Spatial Embedding) - 对应 Eq. (4)
         # 【关键点】这里是 "Adaptive Embedding"，输入是流量 X_H
         # 所以必须用 Linear，而不是 Embedding(num_nodes)
-        self.spatial_linear = nn.Linear(input_dim, hidden_dim)
+        self.spatial_linear = nn.Linear(input_dim, spatial_dim)
 
         # 记录总维度 (用于后续拼接 Eq. 5)
         # Total = d_h + d_d + d_w + d_s
-        self.output_dim = hidden_dim * 4
+        self.output_dim = token_dim + day_dim + week_dim + spatial_dim
 
     def forward(self, x, t_day, t_week):
         """
@@ -40,25 +51,20 @@ class SpatioTemporalEmbedding(nn.Module):
 
         # 1. 流量嵌入
         x_perm = x.permute(0, 3, 1, 2)
-        h_data = self.token_emb(x_perm).permute(0, 2, 3, 1)  # (B, T, N, H)
+        h_data = self.token_emb(x_perm).permute(0, 2, 3, 1)  # (B, T, N, token_dim)
 
         # 2. 时间嵌入
         # t_day 是 LongTensor (B, T, N, 1) -> squeeze -> (B, T, N)
-        # Embedding -> (B, T, N, H)
+        # Embedding -> (B, T, N, day_dim)
         h_day = self.day_emb(t_day.squeeze(-1))
 
-        # [删除/注释掉这行] 因为输入已经包含了 N 维度，不需要再 unsqueeze/expand
-        # h_day = h_day.unsqueeze(2).expand(-1, -1, nodes, -1) <--- 删除！
-
         h_week = self.week_emb(t_week.squeeze(-1))
-        # [删除/注释掉这行]
-        # h_week = h_week.unsqueeze(2).expand(-1, -1, nodes, -1) <--- 删除！
 
         # 3. 空间嵌入
         h_spatial = self.spatial_linear(x)
         h_spatial = F.relu(h_spatial)
 
-        # 4. 融合 (B, T, N, 4H)
+        # 4. 融合 (B, T, N, token_dim + day_dim + week_dim + spatial_dim)
         hidden = torch.cat([h_data, h_day, h_week, h_spatial], dim=-1)
 
         return hidden
