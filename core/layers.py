@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class SpatioTemporalEmbedding(nn.Module):
     def __init__(self, input_dim, 
                  token_dim=64,    # 论文: 64
@@ -43,11 +42,12 @@ class SpatioTemporalEmbedding(nn.Module):
 
     def forward(self, x, t_day, t_week):
         """
-        x: (Batch, Time, Nodes, In_Dim)
-        t_day: (Batch, Time, Nodes, 1) <--- 注意这里由 data_loader 保证了维度
-        t_week: (Batch, Time, Nodes, 1)
+        x: (Batch, Time, Nodes, In_Dim)  <-- 物理特征，如 [B, 12, 716, 3] (Float)
+        t_day: (Batch, Time, Nodes, 1)   <-- 时间索引，如 [B, 12, 716, 1] (Long)
+        t_week: (Batch, Time, Nodes, 1)  <-- 星期索引，如 [B, 12, 716, 1] (Long)
         """
         batch, time, nodes, _ = x.shape
+        # time: 历史观测窗口的长度
 
         # 1. 流量嵌入
         x_perm = x.permute(0, 3, 1, 2)
@@ -72,8 +72,6 @@ class SpatioTemporalEmbedding(nn.Module):
     # ==========================================
     # 积木 2: 分层线性交互块 (HLIBlock)
     # ==========================================
-
-
 class HLIBlock(nn.Module):
     """
     对应论文 4.3 节: Hierarchical Linear Interaction (HLI)
@@ -97,6 +95,7 @@ class HLIBlock(nn.Module):
         # 顺序容器：打包这三个操作，有数据来了就按顺序执行这三个操作
 
         # 低秩投影: P -> rank -> P (对应 Eq. 11)
+        # 复杂度降低到线性
         self.low_rank_1 = nn.Linear(num_patches, rank)
         self.low_rank_2 = nn.Linear(rank, num_patches)
 
@@ -122,6 +121,7 @@ class HLIBlock(nn.Module):
         self.intra_mixer = nn.Linear(patch_size, patch_size)
 
         # FFN
+        # 为什么这么操作？  *4似乎是习惯？
         self.intra_ffn = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim * 4),
             nn.GELU(),

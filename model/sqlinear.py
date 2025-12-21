@@ -85,23 +85,25 @@ class SqLinear(nn.Module):
 
             # 扩展 partition_idx
             idx = self.partition_idx.view(1, 1, -1, 1)
-            idx_val = idx.expand(B, T, -1, D)  # for x_phys (3 channels)
-            idx_t = idx.expand(B, T, -1, 1)  # for time (1 channel)
+            # 变成: [1, 1, 716, 1]
+            # 为什么？为了凑维度。因为原始数据 val 是 4 维的 (Batch, Time, Nodes, Dim)
 
+            idx_val = idx.expand(B, T, -1, D)  # for x_phys (3 channels)
+            # 变成: [B, T, 716, D]
+
+            idx_t = idx.expand(B, T, -1, 1)  # for time (1 channel)
+            # 变成: [B, T, 716, 1]
+            #此时idx_val里面的nodes是重排过后的partition_idx
             # 对所有输入都进行 Gather
+            # 查表取数，根据partition_idx的索引顺序
             val = torch.gather(val, 2, idx_val)
             t_day = torch.gather(t_day, 2, idx_t)
             t_week = torch.gather(t_week, 2, idx_t)
 
-        # ====================================
         # Step 1: Embedding (特征增强)
-        # ====================================
-        # 现在传入的 t_day 是 Long 类型，且维度正确，不会报错
         x = self.embedding(val, t_day, t_week)
 
-        # ====================================
         # Step 2: Patching (变形)
-        # ====================================
         # 对应论文 Eq. 9 的 Patching 操作
         # 我们的 DataLoader 已经把节点按顺序排好了，
         # 所以这里只需要简单的 Reshape (View)
