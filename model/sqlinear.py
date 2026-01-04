@@ -23,8 +23,6 @@ class SqLinear(nn.Module):
         
         # 论文强调无填充，所以这里索引长度应直接等于原始节点数
         if partition_idx is not None:
-            # 注册为 buffer，自动随模型移动到 GPU
-            self.register_buffer('partition_idx', torch.LongTensor(partition_idx))
             self.num_nodes = original_num_nodes
         else:
             self.partition_idx = None
