@@ -10,21 +10,13 @@ from utils.data_loader import get_dataloader
 from utils.metrics import masked_mae, masked_rmse, masked_mape
 from model.sqlinear import SqLinear
 from tqdm import tqdm
-import torch_directml
 
 def main():
     # 1. 加载配置
     args = get_args()
 
-
-    # [修改] 判断逻辑：如果是 AMD 显卡则使用 dml
-    if args.device == 'cuda' or args.device == 'dml':
-        device = torch_directml.device()
-        print(f"检测到 AMD 显卡，已切换至 DirectML 设备: {device}")
-    else:
-        device = torch.device('cpu')
-        print("使用 CPU 进行训练")
-
+    device = torch.device('cpu')
+    print("使用 CPU 进行训练")
 
 
     # 创建保存目录和日志文件
@@ -56,35 +48,31 @@ def main():
     # 2. 加载数据 (自动处理 Partition 和 Scaling)
     train_loader, val_loader, test_loader, partition_idx, scaler_info = get_dataloader(args)
 
-    # [修改] 获取标量 mean/std
-    # 不需要转 Tensor，因为它们是标量，PyTorch 支持 Tensor 和 scalar 运算
+
     mean = scaler_info['mean']
     std = scaler_info['std']
 
     # 3. 初始化模型
-    # 必须将 partition_idx 转为 LongTensor 并移至 GPU
+    # 必须将 partition_idx 转为 LongTensor 并移至 CPU
     partition_idx_tensor = torch.LongTensor(partition_idx).to(device)
 
     model = SqLinear(
         original_num_nodes=args.num_nodes,
         patch_size=args.patch_capacity,
-        input_dim=args.input_dim,   # 3
+        input_dim=args.input_dim,   # 1
         
         # 传入新参数
         token_dim=args.token_dim,     # 64
         day_dim=args.day_dim,         # 32
         week_dim=args.week_dim,       # 32
         spatial_dim=args.spatial_dim, # 32
-        
-        # hidden_dim 参数已经不再需要直接传入了，模型内部会计算 sum
+
         
         num_layers=args.num_layers,
         input_len=args.input_len,
         output_len=args.pred_len,
         partition_idx=partition_idx_tensor
     ).to(device)
-
-
 
     # 4. 优化器配置 (遵循论文)
     # 使用 AdamW 优化器，提供更好的权重衰减处理
@@ -112,21 +100,19 @@ def main():
 
         train_pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}", leave=True)
 
-
-
-        for x, t_d, t_w, y in train_loader:
-            x = x.to(device)  # Float
-            t_d = t_d.to(device)  # Long
-            t_w = t_w.to(device)  # Long
-            y = y.to(device)  # Float
+        for x_flow, x_tod, x_dow, y_flow in train_loader:
+            x_flow = x_flow.to(device)  # Flow: Float
+            x_tod = x_tod.to(device)    # Time of Day Index: Long
+            x_dow = x_dow.to(device)    # Day of Week Index: Long
+            y_flow = y_flow.to(device)  # Flow: Float
 
             optimizer.zero_grad()
 
             # [修改] 传入 3 个参数
-            preds = model(x, t_d, t_w)
+            preds = model(x_flow, x_tod, x_dow)
             
             # Target: 提取 Flow 通道 (B, 12, N, 1) - 数据已在预处理阶段重排
-            y_target = y[..., 0:1]  # 因为 y 已经在 DataLoader 里重排过了
+            y_target = y_flow  # 因为 y_flow 已经是 flow 数据了
             
             # 计算 Loss (标准化空间)
             loss = masked_mae(preds, y_target, null_val=0.0)
@@ -149,23 +135,20 @@ def main():
         val_mae_list = []
         val_rmse_list = []
 
-
-
         with torch.no_grad():
-            for x_phys, t_day, t_week, y_phys in val_loader:
-                x_phys = x_phys.to(device)  # Float
-                t_day = t_day.to(device)    # Long
-                t_week = t_week.to(device)  # Long
-                y_phys = y_phys.to(device)  # Float
+            for x_flow, x_tod, x_dow, y_flow in val_loader:
+                x_flow = x_flow.to(device)  # Flow: Float
+                x_tod = x_tod.to(device)    # Time of Day Index: Long
+                x_dow = x_dow.to(device)    # Day of Week Index: Long
+                y_flow = y_flow.to(device)  # Flow: Float
                 
-                preds = model(x_phys, t_day, t_week)
-                # 提取 Flow 通道 - 数据已在预处理阶段重排
-                y_target = y_phys[..., 0:1]
+                preds = model(x_flow, x_tod, x_dow)
+                # Target: 提取 Flow 通道 - 数据已在预处理阶段重排
+                y_target = y_flow  # 因为 y_flow 已经是 flow 数据了
                 
                 # [关键] 反归一化
-                # 因为 mean/std 是标量，这里直接运算即可，不需要考虑维度广播
                 preds_real = preds * std + mean
-                y_real = y_target * std + mean
+                y_real = y_flow * std + mean  # 使用 y_flow 而不是 y_target
                 
                 # 计算真实误差
                 v_mae = masked_mae(preds_real, y_real, null_val=0.0)
@@ -213,19 +196,19 @@ def main():
     test_mape = []
 
     with torch.no_grad():
-        for x_phys, t_day, t_week, y_phys in test_loader:
-            x_phys = x_phys.to(device)  # Float
-            t_day = t_day.to(device)    # Long
-            t_week = t_week.to(device)  # Long
-            y_phys = y_phys.to(device)  # Float
+        for x_flow, x_tod, x_dow, y_flow in test_loader:
+            x_flow = x_flow.to(device)  # Flow: Float
+            x_tod = x_tod.to(device)    # Time of Day Index: Long
+            x_dow = x_dow.to(device)    # Day of Week Index: Long
+            y_flow = y_flow.to(device)  # Flow: Float
 
-            preds = model(x_phys, t_day, t_week)
-            # 提取 Flow 通道 - 数据已在预处理阶段重排
-            y_target = y_phys[..., 0:1]
+            preds = model(x_flow, x_tod, x_dow)
+            # Target: 提取 Flow 通道 - 数据已在预处理阶段重排
+            y_target = y_flow  # 因为 y_flow 已经是 flow 数据了
 
             # 反归一化
             preds_real = preds * std + mean
-            y_real = y_target * std + mean
+            y_real = y_flow * std + mean  # 使用 y_flow 而不是 y_target
 
             t_mae = masked_mae(preds_real, y_real, null_val=0.0)
             t_rmse = masked_rmse(preds_real, y_real, null_val=0.0)

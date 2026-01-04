@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class SqLinear(nn.Module):
     def __init__(self, original_num_nodes, patch_size,
-                 input_dim=3,          # 物理特征维度 (Flow, Occ, Spd)
+                 input_dim=1,          # 物理特征维度 (只预测 Flow)
                  token_dim=64,         # 新增参数
                  day_dim=32,           # 新增参数
                  week_dim=32,          # 新增参数
@@ -31,7 +31,7 @@ class SqLinear(nn.Module):
         # 直接计算 Patch 数量
         self.num_patches = self.num_nodes // patch_size
         
-        # 打印信息保持专业
+
         print(f"Model Init: Nodes={self.num_nodes}, Patches={self.num_patches} (Padding-free)")
 
         # 1. 嵌入层
@@ -53,7 +53,7 @@ class SqLinear(nn.Module):
         # 2. 核心层 (堆叠 L 层 HLI)
         # 使用较小的rank值以符合低秩投影要求
         self.layers = nn.ModuleList([
-            HLIBlock(self.total_hidden_dim, self.num_patches, patch_size, rank=min(3, patch_size//2))
+            HLIBlock(self.total_hidden_dim, self.num_patches, patch_size, rank= patch_size//2)
             for _ in range(num_layers)
         ])
 
@@ -69,7 +69,7 @@ class SqLinear(nn.Module):
     def forward(self, x_phys, t_day, t_week):  # <--- 接收 3 个输入
         """
         Args:
-            x_phys: (B, T, N, 3) Float  # 已在数据加载时预处理重排
+            x_phys: (B, T, N, 1) Float  # 已在数据加载时预处理重排，只包含流量数据
             t_day:  (B, T, N, 1) Long   # 已在数据加载时预处理重排
             t_week: (B, T, N, 1) Long   # 已在数据加载时预处理重排
         """

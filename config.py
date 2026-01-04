@@ -27,8 +27,8 @@ def get_args():
     parser.add_argument('--week_dim', type=int, default=32, help='周内时间嵌入维度')
     parser.add_argument('--spatial_dim', type=int, default=32, help='空间嵌入维度')
     
-    # 此时 input_dim 应该是 3 (Flow, Occ, Spd)
-    parser.add_argument('--input_dim', type=int, default=3, help='物理输入特征数')
+    # 此时 input_dim 应该是 1 (只预测 Flow)
+    parser.add_argument('--input_dim', type=int, default=1, help='物理输入特征数')
     
     # 确保 output_dim 仍然是 1 (我们只预测流量)
     parser.add_argument('--output_dim', type=int, default=1, help='输出特征维度')
@@ -37,7 +37,7 @@ def get_args():
     # --- 训练参数 ---
     parser.add_argument('--epochs', type=int, default=100, help='训练轮数')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='学习率')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+    parser.add_argument('--device', type=str, default='cpu')
 
     args = parser.parse_args()
     return args
