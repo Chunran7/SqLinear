@@ -28,12 +28,13 @@ class Node:
 # ==========================================
 
 class TrafficDataset(Dataset):
-    def __init__(self, raw_data, indices, input_len, pred_len, steps_per_day=96):
+    def __init__(self, raw_data, indices, input_len, pred_len, partition_idx=None, steps_per_day=96):
         # 注意：因为是 15分钟数据，steps_per_day = 24 * 4 = 96
         self.raw_data = raw_data
         self.indices = indices
         self.input_len = input_len
         self.pred_len = pred_len
+        self.partition_idx = partition_idx  # 新增：用于预处理重排
         self.steps_per_day = steps_per_day
 
     def __len__(self):
@@ -69,6 +70,7 @@ class TrafficDataset(Dataset):
         dow = dow.view(-1, 1, 1).expand(-1, N, 1)
 
         # [关键修改] 返回 4 个独立变量，不再拼接
+        # 注意：数据已在预处理阶段完成重排，无需再次重排
         return x_phys, tod, dow, y_phys
 
 
@@ -102,25 +104,13 @@ def get_dataloader(args):
     num_patches = len(patches)
     print(f"划分完成，生成 {num_patches} 个 Patches。")
 
-    # C. 扁平化并处理 Padding (关键步骤！)
-    # 算法返回的是 [[Node, Node], [Node], ...]，我们需要展平为一维索引列表
+    # C. 扁平化索引 (移除 Padding 逻辑)
+    # 由于 Eq. 7 的存在，对于 SD 数据集 (N=716, C=4)，每个 patch 的长度必然等于 capacity
     partition_idx = []
     for patch in patches:
         for node in patch:
             partition_idx.append(node.original_index)
 
-        # --- Padding 逻辑 ---
-        # 如果某个 Patch 的节点数少于 capacity，需要补齐
-        # 否则模型 reshape 成 (Batch, P, C, D) 时会报错
-        # 策略：用该 Patch 的最后一个节点重复填充 (或者填 0，视模型 Mask 机制而定)
-        # 这里采用"重复填充"，影响较小
-        num_to_pad = args.patch_capacity - len(patch)
-        if num_to_pad > 0:
-            last_node_idx = patch[-1].original_index
-            partition_idx.extend([last_node_idx] * num_to_pad)
-
-    # 此时 partition_idx 的长度一定是 num_patches * patch_capacity
-    # 它包含了所有节点的重排索引，以及为了对齐而补的索引
 
     # -------------------------------------------------------
     # 2. 时序数据加载 (LargeST Benchmark) - 保持不变
@@ -156,10 +146,14 @@ def get_dataloader(args):
 
     # [关键] 严禁在此处再次归一化！数据已经是 Z-Score 过的了！
 
-    # 封装 Dataset (注意 steps_per_day=96)
-    train_set = TrafficDataset(raw_data, idx_train, args.input_len, args.pred_len, steps_per_day=96)
-    val_set   = TrafficDataset(raw_data, idx_val,   args.input_len, args.pred_len, steps_per_day=96)
-    test_set  = TrafficDataset(raw_data, idx_test,  args.input_len, args.pred_len, steps_per_day=96)
+    # [核心修改] 预处理阶段完成重排：根据partition_idx重排原始数据
+    partition_idx_tensor = torch.LongTensor(partition_idx)
+    raw_data = raw_data[:, partition_idx_tensor, :]  # 按分区索引重排数据
+    
+    # 封装 Dataset (注意 steps_per_day=96)，不再传递partition_idx，数据已重排
+    train_set = TrafficDataset(raw_data, idx_train, args.input_len, args.pred_len, None, steps_per_day=96)
+    val_set   = TrafficDataset(raw_data, idx_val,   args.input_len, args.pred_len, None, steps_per_day=96)
+    test_set  = TrafficDataset(raw_data, idx_test,  args.input_len, args.pred_len, None, steps_per_day=96)
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
     val_loader   = DataLoader(val_set,   batch_size=args.batch_size, shuffle=False)

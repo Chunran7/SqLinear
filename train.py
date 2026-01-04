@@ -74,20 +74,7 @@ def main():
         partition_idx=partition_idx_tensor
     ).to(device)
 
-    # 辅助函数：只处理 Flow 通道的重排
-    def reorder_target_flow(y_full, partition_idx):
-        # y_full: (B, T, N, 3)
-        # 1. 只取 Flow (Channel 0)
-        y_flow = y_full[..., 0:1] # (B, T, N, 1)
-        
-        # 2. 重排
-        B, T, N, D = y_flow.shape
-        y_flow = y_flow.permute(0, 1, 3, 2) # (B, T, 1, N)
-        
-        idx = partition_idx.view(1, 1, 1, -1).expand(B, T, D, -1)
-        y_ordered = torch.gather(y_flow, -1, idx) # (B, T, 1, N_padded)
-        
-        return y_ordered.permute(0, 1, 3, 2) # (B, T, N_padded, 1)
+
 
     # 4. 优化器配置 (遵循论文)
     # 使用 AdamW 优化器，提供更好的权重衰减处理
@@ -128,8 +115,8 @@ def main():
             # [修改] 传入 3 个参数
             preds = model(x, t_d, t_w)
             
-            # Target: 提取 Flow 并重排 (B, 12, N_p, 1)
-            y_target = reorder_target_flow(y, partition_idx_tensor)
+            # Target: 提取 Flow 通道 (B, 12, N, 1) - 数据已在预处理阶段重排
+            y_target = y[..., 0:1]  # 因为 y 已经在 DataLoader 里重排过了
             
             # 计算 Loss (标准化空间)
             loss = masked_mae(preds, y_target, null_val=0.0)
@@ -162,7 +149,8 @@ def main():
                 y_phys = y_phys.to(device)  # Float
                 
                 preds = model(x_phys, t_day, t_week)
-                y_target = reorder_target_flow(y_phys, partition_idx_tensor)
+                # 提取 Flow 通道 - 数据已在预处理阶段重排
+                y_target = y_phys[..., 0:1]
                 
                 # [关键] 反归一化
                 # 因为 mean/std 是标量，这里直接运算即可，不需要考虑维度广播
@@ -222,7 +210,8 @@ def main():
             y_phys = y_phys.to(device)  # Float
 
             preds = model(x_phys, t_day, t_week)
-            y_target = reorder_target_flow(y_phys, partition_idx_tensor)
+            # 提取 Flow 通道 - 数据已在预处理阶段重排
+            y_target = y_phys[..., 0:1]
 
             # 反归一化
             preds_real = preds * std + mean

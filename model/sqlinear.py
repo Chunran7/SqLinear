@@ -21,22 +21,20 @@ class SqLinear(nn.Module):
         super().__init__()
         self.patch_size = patch_size
         
-        # [修改 1] 处理 Partition Index 和 Padding 后的节点数
+        # 论文强调无填充，所以这里索引长度应直接等于原始节点数
         if partition_idx is not None:
             # 注册为 buffer，自动随模型移动到 GPU
             self.register_buffer('partition_idx', torch.LongTensor(partition_idx))
-            # 模型的有效节点数 = 索引的长度 (包含了 Padding)
-            self.effective_num_nodes = len(partition_idx)
+            self.num_nodes = original_num_nodes
         else:
             self.partition_idx = None
-            self.effective_num_nodes = original_num_nodes
+            self.num_nodes = original_num_nodes
 
-        # 计算 Patch 数量 (基于填充后的节点数)
-        self.num_patches = self.effective_num_nodes // patch_size
+        # 直接计算 Patch 数量
+        self.num_patches = self.num_nodes // patch_size
         
-        print(f"Model Init: Original Nodes={original_num_nodes}, "
-              f"Effective Nodes (Padded)={self.effective_num_nodes}, "
-              f"Patches={self.num_patches}")
+        # 打印信息保持专业
+        print(f"Model Init: Nodes={self.num_nodes}, Patches={self.num_patches} (Padding-free)")
 
         # 1. 嵌入层
         self.embedding = SpatioTemporalEmbedding(
@@ -73,43 +71,19 @@ class SqLinear(nn.Module):
     def forward(self, x_phys, t_day, t_week):  # <--- 接收 3 个输入
         """
         Args:
-            x_phys: (B, T, N, 3) Float
-            t_day:  (B, T, N, 1) Long
-            t_week: (B, T, N, 1) Long
+            x_phys: (B, T, N, 3) Float  # 已在数据加载时预处理重排
+            t_day:  (B, T, N, 1) Long   # 已在数据加载时预处理重排
+            t_week: (B, T, N, 1) Long   # 已在数据加载时预处理重排
         """
-        # 不再需要切片 val = x_in[...]，直接使用传入的变量
-        val = x_phys
-
-        # 空间重排 (Reordering & Padding)
-        if self.partition_idx is not None:
-            B, T, _, D = val.shape
-
-            # 扩展 partition_idx
-            idx = self.partition_idx.view(1, 1, -1, 1)
-            # 变成: [1, 1, 716, 1]
-            # 为什么？为了凑维度。因为原始数据 val 是 4 维的 (Batch, Time, Nodes, Dim)
-
-            idx_val = idx.expand(B, T, -1, D)  # for x_phys (3 channels)
-            # 变成: [B, T, 716, D]
-
-            idx_t = idx.expand(B, T, -1, 1)  # for time (1 channel)
-            # 变成: [B, T, 716, 1]
-            #此时idx_val里面的nodes是重排过后的partition_idx
-            # 对所有输入都进行 Gather
-            # 查表取数，根据partition_idx的索引顺序
-            val = torch.gather(val, 2, idx_val)
-            t_day = torch.gather(t_day, 2, idx_t)
-            t_week = torch.gather(t_week, 2, idx_t)
-
-        # Step 1: Embedding (特征增强)
-        x = self.embedding(val, t_day, t_week)
+        # 直接进入 Embedding，无需任何重排操作
+        x = self.embedding(x_phys, t_day, t_week)
 
         # Step 2: Patching (变形)
         # 对应论文 Eq. 9 的 Patching 操作
-        # 我们的 DataLoader 已经把节点按顺序排好了，
+        # 数据加载阶段已完成预处理重排，
         # 所以这里只需要简单的 Reshape (View)
         # (B, T, N, H) -> (B, T, P, C, H)
-        B, T, N_pad, H = x.shape
+        B, T, N, H = x.shape  # N 现在是原始节点数，无填充
         x = x.view(B, T, self.num_patches, self.patch_size, H)
 
         # ====================================
@@ -123,7 +97,7 @@ class SqLinear(nn.Module):
         # ====================================
         # 4.1 Unpatch (还原形状) - 对应 Eq. 15
         # (B, T, P, C, H) -> (B, T, N, H)
-        x = x.view(B, T, N_pad, H)
+        x = x.view(B, T, N, H)
 
         # 4.2 预测特征 (Regression) - 对应 Eq. 16
         # 先把特征维变成 1: (B, T, N, H) -> (B, T, N, 1)
