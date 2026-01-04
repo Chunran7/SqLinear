@@ -69,9 +69,9 @@ def main():
         
         return y_ordered.permute(0, 1, 3, 2) # (B, T, N_padded, 1)
 
-    # 4. 优化器配置 (参考论文常见设置)
-    # 通常使用 Adam，学习率 1e-3，权重衰减 1e-4
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
+    # 4. 优化器配置 (遵循论文)
+    # 使用 AdamW 优化器，提供更好的权重衰减处理
+    optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
 
     # 学习率调度器 (MultiStepLR 是时序预测标准配置)
     # 在 20, 40, 70 epoch 衰减学习率，或者根据你的收敛情况调整

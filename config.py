@@ -32,7 +32,7 @@ def get_args():
     
     # 确保 output_dim 仍然是 1 (我们只预测流量)
     parser.add_argument('--output_dim', type=int, default=1, help='输出特征维度')
-    parser.add_argument('--num_layers', type=int, default=3, help='层数')
+    parser.add_argument('--num_layers', type=int, default=1, help='层数')  # SD 对应 L=1
 
     # --- 训练参数 ---
     parser.add_argument('--epochs', type=int, default=100, help='训练轮数')

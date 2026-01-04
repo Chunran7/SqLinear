@@ -55,8 +55,9 @@ class SqLinear(nn.Module):
         print(f"Total Hidden Dim for HLI: {self.total_hidden_dim}")
 
         # 2. 核心层 (堆叠 L 层 HLI)
+        # 使用较小的rank值以符合低秩投影要求
         self.layers = nn.ModuleList([
-            HLIBlock(self.total_hidden_dim, self.num_patches, patch_size)
+            HLIBlock(self.total_hidden_dim, self.num_patches, patch_size, rank=min(3, patch_size//2))
             for _ in range(num_layers)
         ])
 

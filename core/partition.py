@@ -20,8 +20,11 @@ def separate_partitions(nodes, capacity):
 
     nodes.sort(key=lambda node: getattr(node, split_axis))
 
-    # Step 2: Identify splitting position
-    split_pos = int(capacity * math.ceil(len(nodes) / capacity) // 2)
+    # Step 2: Identify splitting position following Eq. 7
+    # 计算总的容量单位数
+    num_units = math.ceil(len(nodes) / capacity)
+    # 按照论文 Eq. 7，确保分割位置使得左右子集的节点数都是capacity的整数倍
+    split_pos = capacity * (num_units // 2)
 
     # Step 3: Partition and recurse
     nodes1 = nodes[:split_pos]
