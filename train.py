@@ -10,12 +10,22 @@ from utils.data_loader import get_dataloader
 from utils.metrics import masked_mae, masked_rmse, masked_mape
 from model.sqlinear import SqLinear
 from tqdm import tqdm
-
+import torch_directml
 
 def main():
     # 1. 加载配置
     args = get_args()
-    device = torch.device(args.device)
+
+
+    # [修改] 判断逻辑：如果是 AMD 显卡则使用 dml
+    if args.device == 'cuda' or args.device == 'dml':
+        device = torch_directml.device()
+        print(f"检测到 AMD 显卡，已切换至 DirectML 设备: {device}")
+    else:
+        device = torch.device('cpu')
+        print("使用 CPU 进行训练")
+
+
 
     # 创建保存目录和日志文件
     save_dir = os.path.join('./checkpoints', args.dataset_type)

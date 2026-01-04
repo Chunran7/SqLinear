@@ -155,9 +155,9 @@ def get_dataloader(args):
     val_set   = TrafficDataset(raw_data, idx_val,   args.input_len, args.pred_len, None, steps_per_day=96)
     test_set  = TrafficDataset(raw_data, idx_test,  args.input_len, args.pred_len, None, steps_per_day=96)
 
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
-    val_loader   = DataLoader(val_set,   batch_size=args.batch_size, shuffle=False)
-    test_loader  = DataLoader(test_set,  batch_size=args.batch_size, shuffle=False)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=False)
+    val_loader   = DataLoader(val_set,   batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=False)
+    test_loader  = DataLoader(test_set,  batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=False)
 
     scaler_info = {'mean': scaler_mean, 'std': scaler_std}
 
