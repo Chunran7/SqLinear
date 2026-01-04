@@ -3,6 +3,8 @@ import time
 import torch
 import torch.optim as optim
 import numpy as np
+import logging
+from datetime import datetime
 from config import get_args
 from utils.data_loader import get_dataloader
 from utils.metrics import masked_mae, masked_rmse, masked_mape
@@ -15,13 +17,31 @@ def main():
     args = get_args()
     device = torch.device(args.device)
 
-    # 创建保存目录
+    # 创建保存目录和日志文件
     save_dir = os.path.join('./checkpoints', args.dataset_type)
     os.makedirs(save_dir, exist_ok=True)
+    
+    # 生成带时间戳的日志文件名
+    log_filename = os.path.join(save_dir, f"train_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    
+    # 配置 Logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(message)s',
+        handlers=[
+            logging.FileHandler(log_filename), # 写入文件
+            logging.StreamHandler()            # 输出到控制台
+        ]
+    )
+    
+    def log_string(string):
+        logging.info(string)
 
-    print(f"--- Running Training strictly following SqLinear Paper ---")
-    print(f"Device: {device}")
-    print(f"Patch Capacity: {args.patch_capacity}")
+    log_string(f"--- Running Training strictly following SqLinear Paper ---")
+    log_string(f"Log file saved to: {log_filename}")
+    log_string(f"Device: {device}")
+    log_string(f"Hyperparameters: {args}")
+    log_string(f"Patch Capacity: {args.patch_capacity}")
 
     # 2. 加载数据 (自动处理 Partition 和 Scaling)
     train_loader, val_loader, test_loader, partition_idx, scaler_info = get_dataloader(args)
@@ -162,9 +182,12 @@ def main():
 
         end_time = time.time()
 
-        print(f"Epoch {epoch + 1:03d} | Time: {end_time - start_time:.2f}s | "
-              f"Train Loss: {train_loss:.4f} | "
-              f"Val MAE: {val_mae:.4f} | Val RMSE: {val_rmse:.4f}")
+        # 使用格式化字符串记录每一轮的详细信息
+        log_string(
+            f"Epoch {epoch + 1:03d} | Time: {end_time - start_time:.2f}s | "
+            f"Train Loss: {train_loss:.4f} | "
+            f"Val MAE: {val_mae:.4f} | Val RMSE: {val_rmse:.4f}"
+        )
 
         # --- Early Stopping ---
         # 基于验证集 MAE (真实流量误差) 来决定模型好坏
@@ -173,15 +196,16 @@ def main():
             patience_count = 0
             best_model_path = os.path.join(save_dir, 'best_model.pth')
             torch.save(model.state_dict(), best_model_path)
-            print(f"  >>> Best MAE updated. Model saved.")
+            log_string(f"  >>> Best Val MAE updated: {val_mae:.4f}. Model saved.")
         else:
             patience_count += 1
             if patience_count >= max_patience:
-                print(f"  >>> Early stopping triggered at epoch {epoch + 1}")
+                log_string(f"  >>> Early stopping triggered at epoch {epoch + 1}")
                 break
 
     # --- Final Test Step ---
-    print("\n--- Starting Final Testing ---")
+    log_string("\n" + "="*30)
+    log_string("Starting Final Testing on Test Set")
     # 加载最优模型
     model.load_state_dict(torch.load(os.path.join(save_dir, 'best_model.pth')))
     model.eval()
@@ -212,10 +236,15 @@ def main():
             test_rmse.append(t_rmse.item())
             test_mape.append(t_mape.item())
 
-    print(f"Final Test Results ({args.dataset_type}):")
-    print(f"MAE : {np.mean(test_mae):.4f}")
-    print(f"RMSE: {np.mean(test_rmse):.4f}")
-    print(f"MAPE: {np.mean(test_mape):.4f}")
+    avg_mae = np.mean(test_mae)
+    avg_rmse = np.mean(test_rmse)
+    avg_mape = np.mean(test_mape)
+
+    log_string(f"Final Test Results ({args.dataset_type}):")
+    log_string(f"MAE  : {avg_mae:.4f}")
+    log_string(f"RMSE : {avg_rmse:.4f}")
+    log_string(f"MAPE : {avg_mape:.4f}")
+    log_string("="*30)
 
 
 if __name__ == "__main__":
